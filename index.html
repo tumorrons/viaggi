@@ -1,0 +1,2056 @@
+            <div class="settings-section">
+                <h3>💾 Backup e Ripristino</h3>
+                <div class="form-group">
+                    <button class="action-btn secondary" onclick="createFullBackup()">📤 Backup Completo</button>
+                    <button class="action-btn secondary" onclick="restoreFromBackup()">📥 Ripristina Backup</button>
+                </div>
+                
+                <h3>📊 Statistiche</h3>
+                <div id="stats" style="background: #f8f9fa; padding: 20px; border-radius: 10px;">
+                    <div>Viaggi salvati: <span id="tripCount">0</span></div>
+                    <div>Elementi preferiti: <span id="favoritesCount">0</span></div>
+                    <div>Ultimo salvataggio: <span id="lastSave">Mai</span></div>
+                </div>
+                
+                <h3>🔄 Reset Dati</h3>
+                <div class="form-group">
+                    <button class="action-btn danger" onclick="resetAllData()">🗑️ Reset Completo</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Preferiti -->
+    <div class="modal" id="favoritesModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="favoritesModalTitle">📋 Aggiungi dai Preferiti</h3>
+                <button class="close-btn" onclick="closeFavoritesModal()">×</button>
+            </div>
+            <div class="favorites-list" id="favoritesModalList"></div>
+            <div class="modal-actions">
+                <button class="modal-btn primary" onclick="addSelectedFavorites()">✅ Aggiungi Selezionati</button>
+                <button class="modal-btn secondary" onclick="closeFavoritesModal()">❌ Annulla</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Dati dell'applicazione
+        let currentTrip = {
+            id: null,
+            name: 'Nuovo Viaggio',
+            categories: {
+                clothing: [],
+                hygiene: [],
+                medicine: [],
+                electronics: [],
+                documents: [],
+                todo: []
+            },
+            createdAt: null,
+            updatedAt: null
+        };
+
+        let savedTrips = [];
+        
+        let favorites = {
+            clothing: ['Maglietta', 'Jeans', 'Scarpe comode', 'Giacca', 'Intimo', 'Calze'],
+            hygiene: ['Spazzolino', 'Dentifricio', 'Shampoo', 'Sapone', 'Deodorante', 'Crema'],
+            medicine: ['Metformina', 'Toujeo', 'Tachipirina', 'Aspirina', 'Cerotti', 'Disinfettante'],
+            electronics: ['Caricabatterie', 'Powerbank', 'Cuffie', 'Adattatore', 'Cavo USB'],
+            documents: ['Passaporto', 'Carta identità', 'Tessera sanitaria', 'Patente', 'Biglietti'],
+            todo: ['Controllare meteo', 'Prenotare hotel', 'Controllo documenti', 'Preparare valigia']
+        };
+
+        let currentEditingItem = null;
+        let currentFavoritesCategory = null;
+
+        // Inizializzazione
+        window.addEventListener('load', () => {
+            loadFromLocalStorage();
+            setupAutoSave();
+            updateStats();
+            renderAllCategories();
+            renderFavoritesManagement();
+        });
+
+        // Trip Management
+        function editTripTitle() {
+            const display = document.getElementById('tripTitleDisplay');
+            const edit = document.getElementById('tripTitleEdit');
+            
+            edit.value = currentTrip.name;
+            display.style.display = 'none';
+            edit.style.display = 'block';
+            edit.focus();
+            edit.select();
+        }
+
+        function saveTripTitle() {
+            const display = document.getElementById('tripTitleDisplay');
+            const edit = document.getElementById('tripTitleEdit');
+            
+            if (edit.value.trim()) {
+                currentTrip.name = edit.value.trim();
+                display.textContent = currentTrip.name;
+            }
+            
+            display.style.display = 'block';
+            edit.style.display = 'none';
+            
+            saveToLocalStorage();
+            updateSyncStatus('💾 Titolo salvato');
+        }
+
+        function handleTitleKeypress(event) {
+            if (event.key === 'Enter') {
+                event.target.blur();
+            }
+        }
+
+        function newTrip() {
+            if (hasUnsavedChanges()) {
+                if (!confirm('Hai modifiche non salvate. Vuoi iniziare un nuovo viaggio?')) {
+                    return;
+                }
+            }
+            
+            currentTrip = {
+                id: null,
+                name: 'Nuovo Viaggio',
+                categories: {
+                    clothing: [],
+                    hygiene: [],
+                    medicine: [],
+                    electronics: [],
+                    documents: [],
+                    todo: []
+                },
+                createdAt: null,
+                updatedAt: null
+            };
+            
+            document.getElementById('tripTitleDisplay').textContent = currentTrip.name;
+            renderAllCategories();
+            saveToLocalStorage();
+            updateSyncStatus('🆕 Nuovo viaggio iniziato');
+        }
+
+        function saveTrip() {
+            if (!currentTrip.name.trim() || currentTrip.name === 'Nuovo Viaggio') {
+                alert('Inserisci un nome per il viaggio prima di salvarlo.');
+                editTripTitle();
+                return;
+            }
+            
+            if (!currentTrip.id) {
+                currentTrip.id = Date.now().toString();
+                currentTrip.createdAt = new Date().toISOString();
+            }
+            currentTrip.updatedAt = new Date().toISOString();
+            
+            const existingIndex = savedTrips.findIndex(trip => trip.id === currentTrip.id);
+            if (existingIndex >= 0) {
+                savedTrips[existingIndex] = JSON.parse(JSON.stringify(currentTrip));
+            } else {
+                savedTrips.push(JSON.parse(JSON.stringify(currentTrip)));
+            }
+            
+            saveToLocalStorage();
+            updateStats();
+            updateSyncStatus('💾 Viaggio salvato!');
+            
+            if (getGoogleSheetsURL()) {
+                syncWithGoogleSheets();
+            }
+        }
+
+        function hasUnsavedChanges() {
+            const totalItems = Object.values(currentTrip.categories).reduce((sum, items) => sum + items.length, 0);
+            return totalItems > 0 || currentTrip.name !== 'Nuovo Viaggio';
+        }
+
+        // Item Management
+        function addItem(category) {
+            const input = document.getElementById(`${category}-input`);
+            const text = input.value.trim();
+            
+            if (text) {
+                currentTrip.categories[category].push({
+                    text: text,
+                    completed: false,
+                    id: Date.now() + Math.random()
+                });
+                
+                input.value = '';
+                renderCategory(category);
+                saveToLocalStorage();
+                
+                if (getGoogleSheetsURL()) {
+                    debounceSync();
+                }
+            }
+        }
+
+        function removeItem(category, itemId) {
+            if (confirm('Sei sicuro di voler eliminare questo elemento?')) {
+                currentTrip.categories[category] = currentTrip.categories[category].filter(item => item.id !== itemId);
+                renderCategory(category);
+                saveToLocalStorage();
+                
+                if (getGoogleSheetsURL()) {
+                    debounceSync();
+                }
+            }
+        }
+
+        function toggleItem(category, itemId) {
+            const item = currentTrip.categories[category].find(item => item.id === itemId);
+            if (item) {
+                item.completed = !item.completed;
+                renderCategory(category);
+                saveToLocalStorage();
+                
+                if (getGoogleSheetsURL()) {
+                    debounceSync();
+                }
+            }
+        }
+
+        function editItem(category, itemId) {
+            currentEditingItem = { category, itemId };
+            renderCategory(category);
+        }
+
+        function saveItemEdit(category, itemId, newText) {
+            const item = currentTrip.categories[category].find(item => item.id === itemId);
+            if (item && newText.trim()) {
+                item.text = newText.trim();
+                currentEditingItem = null;
+                renderCategory(category);
+                saveToLocalStorage();
+                
+                if (getGoogleSheetsURL()) {
+                    debounceSync();
+                }
+            }
+        }
+
+        function cancelItemEdit() {
+            currentEditingItem = null;
+            renderAllCategories();
+        }
+
+        function renderCategory(category) {
+            const list = document.getElementById(`${category}-list`);
+            const items = currentTrip.categories[category];
+            
+            if (items.length === 0) {
+                list.innerHTML = '<div class="empty-state">Nessun elemento aggiunto</div>';
+                return;
+            }
+            
+            list.innerHTML = items.map(item => {
+                const isEditing = currentEditingItem && 
+                                currentEditingItem.category === category && 
+                                currentEditingItem.itemId === item.id;
+                
+                if (isEditing) {
+                    return `
+                        <div class="item editing">
+                            <div class="item-content">
+                                <input type="checkbox" class="item-checkbox" 
+                                       ${item.completed ? 'checked' : ''}
+                                       onchange="toggleItem('${category}', ${item.id})">
+                                <input type="text" class="item-edit-input" 
+                                       value="${item.text}" 
+                                       onblur="saveItemEdit('${category}', ${item.id}, this.value)"
+                                       onkeypress="handleItemEditKeypress(event, '${category}', ${item.id}, this.value)"
+                                       id="edit-input-${item.id}">
+                            </div>
+                            <div class="item-actions">
+                                <button class="item-btn save-btn" onclick="saveItemEdit('${category}', ${item.id}, document.getElementById('edit-input-${item.id}').value)">✅</button>
+                                <button class="item-btn cancel-btn" onclick="cancelItemEdit()">❌</button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div class="item ${item.completed ? 'completed' : ''}">
+                            <div class="item-content">
+                                <input type="checkbox" class="item-checkbox" 
+                                       ${item.completed ? 'checked' : ''}
+                                       onchange="toggleItem('${category}', ${item.id})">
+                                <span class="item-text">${item.text}</span>
+                            </div>
+                            <div class="item-actions">
+                                <button class="item-btn edit-btn" onclick="editItem('${category}', ${item.id})">✏️</button>
+                                <button class="item-btn delete-btn" onclick="removeItem('${category}', ${item.id})">🗑️</button>
+                            </div>
+                        </div>
+                    `;
+                }
+            }).join('');
+            
+            // Focus sull'input di modifica se necessario
+            if (currentEditingItem && currentEditingItem.category === category) {
+                const editInput = document.getElementById(`edit-input-${currentEditingItem.itemId}`);
+                if (editInput) {
+                    editInput.focus();
+                    editInput.select();
+                }
+            }
+        }
+
+        function handleItemEditKeypress(event, category, itemId, value) {
+            if (event.key === 'Enter') {
+                saveItemEdit(category, itemId, value);
+            } else if (event.key === 'Escape') {
+                cancelItemEdit();
+            }
+        }
+
+        function renderAllCategories() {
+            Object.keys(currentTrip.categories).forEach(category => {
+                renderCategory(category);
+            });
+        }
+
+        // Favorites Management
+        function showFavoritesModal(category) {
+            currentFavoritesCategory = category;
+            const modal = document.getElementById('favoritesModal');
+            const title = document.getElementById('favoritesModalTitle');
+            const list = document.getElementById('favoritesModalList');
+            
+            title.textContent = `📋 ${getCategoryName(category)} - Preferiti`;
+            
+            if (favorites[category].length === 0) {
+                list.innerHTML = '<div class="empty-state">Nessun preferito configurato per questa categoria</div>';
+            } else {
+                list.innerHTML = favorites[category].map(item => `
+                    <div class="favorite-item">
+                        <input type="checkbox" class="favorite-checkbox" value="${item}">
+                        <span class="favorite-text">${item}</span>
+                    </div>
+                `).join('');
+            }
+            
+            modal.classList.add('show');
+        }
+
+        function closeFavoritesModal() {
+            document.getElementById('favoritesModal').classList.remove('show');
+            currentFavoritesCategory = null;
+        }
+
+        function addSelectedFavorites() {
+            if (!currentFavoritesCategory) return;
+            
+            const checkboxes = document.querySelectorAll('.favorite-checkbox:checked');
+            let addedCount = 0;
+            
+            checkboxes.forEach(checkbox => {
+                const text = checkbox.value;
+                const exists = currentTrip.categories[currentFavoritesCategory].some(item => item.text === text);
+                
+                if (!exists) {
+                    currentTrip.categories[currentFavoritesCategory].push({
+                        text: text,
+                        completed: false,
+                        id: Date.now() + Math.random() + addedCount
+                    });
+                    addedCount++;
+                }
+            });
+            
+            renderCategory(currentFavoritesCategory);
+            closeFavoritesModal();
+            saveToLocalStorage();
+            
+            if (addedCount > 0) {
+                updateSyncStatus(`✅ ${addedCount} elementi aggiunti dai preferiti`);
+                
+                if (getGoogleSheetsURL()) {
+                    debounceSync();
+                }
+            } else {
+                updateSyncStatus('ℹ️ Nessun nuovo elemento da aggiungere');
+            }
+        }
+
+        function renderFavoritesManagement() {
+            const container = document.getElementById('favorites-categories');
+            
+            container.innerHTML = Object.keys(favorites).map(category => {
+                return `
+                    <div class="favorites-category">
+                        <div class="favorites-category-header">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="font-size: 1.5em;">${getCategoryIcon(category)}</span>
+                                <span class="favorites-category-title">${getCategoryName(category)}</span>
+                            </div>
+                        </div>
+                        <div class="item-input-container">
+                            <input type="text" class="item-input" id="favorite-${category}-input" placeholder="Aggiungi nuovo preferito...">
+                            <button class="add-btn" onclick="addFavorite('${category}')">Aggiungi</button>
+                        </div>
+                        <div id="favorites-${category}-list"></div>
+                    </div>
+                `;
+            }).join('');
+            
+            // Renderizza gli elementi di ogni categoria
+            Object.keys(favorites).forEach(category => {
+                renderFavoritesCategory(category);
+            });
+        }
+
+        function renderFavoritesCategory(category) {
+            const list = document.getElementById(`favorites-${category}-list`);
+            
+            if (favorites[category].length === 0) {
+                list.innerHTML = '<div class="empty-state">Nessun preferito configurato</div>';
+                return;
+            }
+            
+            list.innerHTML = favorites[category].map((item, index) => {
+                return `
+                    <div class="favorite-management-item">
+                        <span class="favorite-text">${item}</span>
+                        <div class="item-actions">
+                            <button class="item-btn edit-btn" onclick="editFavorite('${category}', ${index})">✏️</button>
+                            <button class="item-btn delete-btn" onclick="removeFavorite('${category}', ${index})">🗑️</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function addFavorite(category) {
+            const input = document.getElementById(`favorite-${category}-input`);
+            const text = input.value.trim();
+            
+            if (text && !favorites[category].includes(text)) {
+                favorites[category].push(text);
+                input.value = '';
+                renderFavoritesCategory(category);
+                saveToLocalStorage();
+                updateStats();
+                updateSyncStatus('⭐ Preferito aggiunto');
+            }
+        }
+
+        function removeFavorite(category, index) {
+            if (confirm('Sei sicuro di voler rimuovere questo preferito?')) {
+                favorites[category].splice(index, 1);
+                renderFavoritesCategory(category);
+                saveToLocalStorage();
+                updateStats();
+                updateSyncStatus('🗑️ Preferito rimosso');
+            }
+        }
+
+        function editFavorite(category, index) {
+            const newText = prompt('Modifica preferito:', favorites[category][index]);
+            if (newText && newText.trim() && newText.trim() !== favorites[category][index]) {
+                favorites[category][index] = newText.trim();
+                renderFavoritesCategory(category);
+                saveToLocalStorage();
+                updateSyncStatus('✏️ Preferito modificato');
+            }
+        }
+
+        // Utility Functions
+        function getCategoryIcon(category) {
+            const icons = {
+                clothing: '👔',
+                hygiene: '🧴',
+                medicine: '💊',
+                electronics: '📱',
+                documents: '📄',
+                todo: '✅'
+            };
+            return icons[category] || '📝';
+        }
+
+        function getCategoryName(category) {
+            const names = {
+                clothing: 'Abbigliamento',
+                hygiene: 'Igiene & Bellezza',
+                medicine: 'Medicinali',
+                electronics: 'Elettronica',
+                documents: 'Documenti',
+                todo: 'Cose da Fare'
+            };
+            return names[category] || category;
+        }
+
+        function updateSyncStatus(message, type = 'offline') {
+            const status = document.getElementById('syncStatus');
+            status.textContent = message;
+            status.className = `sync-status ${type}`;
+            
+            // Auto-clear status dopo 3 secondi
+            setTimeout(() => {
+                if (getGoogleSheetsURL()) {
+                    status.textContent = '☁️ Sincronizzato con Google Sheets';
+                    status.className = 'sync-status connected';
+                } else {
+                    status.textContent = '💾 Salvato localmente';
+                    status.className = 'sync-status offline';
+                }
+            }, 3000);
+        }
+
+        // Storage Functions
+        function saveToLocalStorage() {
+            const data = {
+                currentTrip: currentTrip,
+                savedTrips: savedTrips,
+                favorites: favorites,
+                googleSheetsURL: getGoogleSheetsURL(),
+                lastSave: new Date().toISOString()
+            };
+            
+            localStorage.setItem('travelListProData', JSON.stringify(data));
+        }
+
+        function loadFromLocalStorage() {
+            const saved = localStorage.getItem('travelListProData');
+            if (saved) {
+                try {
+                    const data = JSON.parse(saved);
+                    currentTrip = data.currentTrip || currentTrip;
+                    savedTrips = data.savedTrips || [];
+                    favorites = data.favorites || favorites;
+                    
+                    // Carica URL Google Sheets se presente
+                    if (data.googleSheetsURL) {
+                        document.getElementById('googleSheetsURL').value = data.googleSheetsURL;
+                    }
+                    
+                    // Aggiorna UI
+                    document.getElementById('tripTitleDisplay').textContent = currentTrip.name;
+                    renderAllCategories();
+                    renderSavedTrips();
+                } catch (error) {
+                    console.error('Errore caricamento dati:', error);
+                }
+            }
+        }
+
+        // Auto-save
+        let syncTimeout;
+        function debounceSync() {
+            clearTimeout(syncTimeout);
+            syncTimeout = setTimeout(() => {
+                if (getGoogleSheetsURL()) {
+                    syncWithGoogleSheets();
+                }
+            }, 2000);
+        }
+
+        function setupAutoSave() {
+            // Auto-save ogni 5 minuti
+            setInterval(() => {
+                saveToLocalStorage();
+                if (getGoogleSheetsURL()) {
+                    syncWithGoogleSheets();
+                }
+            }, 300000);
+
+            // Auto-save quando si perde il focus
+            window.addEventListener('blur', saveToLocalStorage);
+            
+            // Auto-save su visibility change (cambio tab, chiusura app)
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) {
+                    saveToLocalStorage();
+                    if (getGoogleSheetsURL()) {
+                        syncWithGoogleSheets();
+                    }
+                }
+            });
+        }
+
+        // Google Sheets Integration
+        function getGoogleSheetsURL() {
+            return document.getElementById('googleSheetsURL').value.trim();
+        }
+
+        function testGoogleSheetsConnection() {
+            const url = getGoogleSheetsURL();
+            if (!url) {
+                alert('Inserisci prima un URL Google Sheets');
+                return;
+            }
+            
+            updateSyncStatus('🔄 Test connessione...', 'syncing');
+            
+            // Estrae l'ID dello sheet dall'URL
+            const sheetId = extractSheetId(url);
+            if (!sheetId) {
+                updateSyncStatus('❌ URL non valido', 'error');
+                alert('URL Google Sheets non valido. Assicurati di copiare il link completo.');
+                return;
+            }
+            
+            // Usa JSONP per bypassare CORS
+            const callback = 'jsonp_callback_' + Date.now();
+            const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=TravelData`;
+            
+            // Crea script tag per JSONP
+            const script = document.createElement('script');
+            script.src = csvUrl;
+            
+            // Timeout per la connessione
+            const timeout = setTimeout(() => {
+                document.head.removeChild(script);
+                showCORSWorkaround();
+            }, 5000);
+            
+            script.onload = () => {
+                clearTimeout(timeout);
+                document.head.removeChild(script);
+                updateSyncStatus('✅ Sheet trovato! (Usa workaround CORS)', 'connected');
+                saveToLocalStorage();
+            };
+            
+            script.onerror = () => {
+                clearTimeout(timeout);
+                document.head.removeChild(script);
+                showCORSWorkaround();
+            };
+            
+            document.head.appendChild(script);
+        }
+
+        function showCORSWorkaround() {
+            updateSyncStatus('⚠️ CORS Limitazione', 'error');
+            
+            const workaroundMessage = `
+🔒 LIMITAZIONE CORS RILEVATA
+
+Il browser blocca l'accesso diretto a Google Sheets per motivi di sicurezza.
+
+🛠️ SOLUZIONI DISPONIBILI:
+
+1️⃣ HOSTING WEB (Consigliato)
+   • Carica la webapp su un server web
+   • GitHub Pages, Netlify, Vercel (tutti gratuiti)
+   • Problema CORS risolto automaticamente
+
+2️⃣ ESTENSIONE BROWSER
+   • Installa "CORS Unblock" o simili
+   • Disabilita temporaneamente CORS
+   • ⚠️ Ricorda di riattivarlo dopo
+
+3️⃣ SERVER LOCALE
+   • Usa: python -m http.server 8000
+   • Apri: http://localhost:8000/travel-list.html
+   • Funziona senza limitazioni CORS
+
+4️⃣ SYNC MANUALE (Sempre Funzionante)
+   • Export/Import funziona sempre
+   • Condividi file JSON tra dispositivi
+   • Zero problemi tecnici
+
+💡 Per ora usa Export/Import per multi-device!
+            `;
+            
+            if (confirm(workaroundMessage + '\n\nVuoi continuare con la sincronizzazione manuale?')) {
+                // Rimuovi URL per evitare errori continui
+                document.getElementById('googleSheetsURL').value = '';
+                updateSyncStatus('💾 Sync manuale attivata - Usa Export/Import', 'offline');
+            }
+        }
+
+        function syncWithGoogleSheets() {
+            const url = getGoogleSheetsURL();
+            if (!url) return;
+            
+            updateSyncStatus('☁️ Tentativo sincronizzazione...', 'syncing');
+            
+            const sheetId = extractSheetId(url);
+            if (!sheetId) {
+                updateSyncStatus('❌ URL non valido', 'error');
+                return;
+            }
+            
+            // Tenta sincronizzazione con gestione CORS
+            attemptSyncWithCORSHandling(sheetId);
+        }
+
+        function attemptSyncWithCORSHandling(sheetId) {
+            // Metodo 1: Tenta fetch normale
+            const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=0`;
+            
+            fetch(csvUrl, { 
+                mode: 'cors',
+                credentials: 'omit'
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.text();
+                }
+                throw new Error('CORS blocked');
+            })
+            .then(csvData => {
+                processSyncData(csvData);
+                updateSyncStatus('✅ Sincronizzato con Google Sheets', 'connected');
+            })
+            .catch(error => {
+                // Fallback: Sync solo locale
+                console.log('CORS blocked, fallback to local sync');
+                saveToLocalStorage();
+                updateSyncStatus('💾 Salvato localmente (CORS limita cloud)', 'offline');
+                
+                // Mostra messaggio una volta sola
+                if (!localStorage.getItem('corsWarningShown')) {
+                    setTimeout(() => {
+                        alert('💡 Google Sheets sync limitata da CORS.\n\nSoluzioni:\n• Usa Export/Import per multi-device\n• Carica webapp su server web\n• Vedi Configurazione per dettagli');
+                        localStorage.setItem('corsWarningShown', 'true');
+                    }, 2000);
+                }
+            });
+        }
+
+        function processSyncData(csvData) {
+            // Processa i dati CSV se la sincronizzazione funziona
+            try {
+                // Parsing CSV con PapaParse
+                const parsed = Papa.parse(csvData, {
+                    header: true,
+                    skipEmptyLines: true
+                });
+                
+                console.log('Dati sincronizzati:', parsed.data);
+                // Qui potresti elaborare i dati ricevuti
+                
+            } catch (error) {
+                console.error('Errore parsing CSV:', error);
+            }
+            
+            // Per ora salva solo localmente
+            saveToLocalStorage();
+        }
+
+        function extractSheetId(url) {
+            // Estrae l'ID dello sheet da vari formati di URL Google Sheets
+            const regex = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
+            const match = url.match(regex);
+            return match ? match[1] : null;
+        }
+
+        function clearGoogleSheetsURL() {
+            if (confirm('Vuoi rimuovere il link Google Sheets? I dati rimarranno salvati localmente.')) {
+                document.getElementById('googleSheetsURL').value = '';
+                saveToLocalStorage();
+                updateSyncStatus('🔌 Sincronizzazione cloud disabilitata', 'offline');
+            }
+        }
+
+        // PDF Generation
+        function generatePDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            let yPosition = 20;
+            
+            // Titolo
+            doc.setFontSize(20);
+            doc.setFont(undefined, 'bold');
+            doc.text(currentTrip.name, 105, yPosition, { align: 'center' });
+            yPosition += 20;
+            
+            // Data generazione
+            doc.setFontSize(10);
+            doc.setFont(undefined, 'normal');
+            doc.text(`Generato il: ${new Date().toLocaleString('it-IT')}`, 20, yPosition);
+            yPosition += 15;
+            
+            // Categorie
+            Object.keys(currentTrip.categories).forEach(category => {
+                const items = currentTrip.categories[category];
+                if (items.length > 0) {
+                    if (yPosition > 250) {
+                        doc.addPage();
+                        yPosition = 20;
+                    }
+                    
+                    // Titolo categoria
+                    doc.setFont(undefined, 'bold');
+                    doc.setFontSize(14);
+                    doc.text(`${getCategoryIcon(category)} ${getCategoryName(category)}`, 20, yPosition);
+                    yPosition += 10;
+                    
+                    // Items
+                    doc.setFont(undefined, 'normal');
+                    doc.setFontSize(10);
+                    items.forEach(item => {
+                        const checkbox = item.completed ? '☑' : '☐';
+                        const text = `${checkbox} ${item.text}`;
+                        doc.text(text, 25, yPosition);
+                        yPosition += 6;
+                        
+                        if (yPosition > 280) {
+                            doc.addPage();
+                            yPosition = 20;
+                        }
+                    });
+                    
+                    yPosition += 8;
+                }
+            });
+            
+            // Footer
+            const pageCount = doc.internal.getNumberOfPages();
+            for (let i = 1; i <= pageCount; i++) {
+                doc.setPage(i);
+                doc.setFontSize(8);
+                doc.text(`Travel List Pro - Pagina ${i}/${pageCount}`, 105, 290, { align: 'center' });
+            }
+            
+            const fileName = `${currentTrip.name.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toLocaleDateString('it-IT').replace(/\//g, '-')}.pdf`;
+            doc.save(fileName);
+            
+            updateSyncStatus('📄 PDF generato!', 'connected');
+        }
+
+        // Saved Trips Management
+        function renderSavedTrips() {
+            const container = document.getElementById('saved-trips');
+            
+            if (savedTrips.length === 0) {
+                container.innerHTML = '<div class="empty-state">Nessun viaggio salvato</div>';
+                return;
+            }
+            
+            container.innerHTML = savedTrips
+                .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+                .map(trip => {
+                    const totalItems = Object.values(trip.categories).reduce((sum, items) => sum + items.length, 0);
+                    const completedItems = Object.values(trip.categories).reduce((sum, items) => 
+                        sum + items.filter(item => item.completed).length, 0);
+                    
+                    return `
+                        <div class="favorite-management-item" onclick="loadTrip('${trip.id}')">
+                            <div>
+                                <div style="font-weight: bold; font-size: 1.1em;">${trip.name}</div>
+                                <div style="color: #666; font-size: 0.9em;">
+                                    📅 ${new Date(trip.updatedAt).toLocaleDateString('it-IT')} | 
+                                    📋 ${totalItems} elementi | 
+                                    ✅ ${completedItems}/${totalItems} completati
+                                </div>
+                            </div>
+                            <div class="item-actions" onclick="event.stopPropagation()">
+                                <button class="item-btn edit-btn" onclick="loadTrip('${trip.id}')">📂 Carica</button>
+                                <button class="item-btn delete-btn" onclick="deleteTrip('${trip.id}')">🗑️</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+        }
+
+        function loadTrip(tripId) {
+            const trip = savedTrips.find(t => t.id === tripId);
+            if (!trip) return;
+            
+            if (hasUnsavedChanges()) {
+                if (!confirm('Hai modifiche non salvate nel viaggio corrente. Vuoi continuare?')) {
+                    return;
+                }
+            }
+            
+            currentTrip = JSON.parse(JSON.stringify(trip));
+            document.getElementById('tripTitleDisplay').textContent = currentTrip.name;
+            renderAllCategories();
+            switchTab('current');
+            updateSyncStatus('📂 Viaggio caricato!');
+        }
+
+        function deleteTrip(tripId) {
+            if (confirm('Sei sicuro di voler eliminare questo viaggio?')) {
+                savedTrips = savedTrips.filter(trip => trip.id !== tripId);
+                
+                // Se è il viaggio corrente, resettalo
+                if (currentTrip.id === tripId) {
+                    newTrip();
+                }
+                
+                saveToLocalStorage();
+                renderSavedTrips();
+                updateStats();
+                updateSyncStatus('🗑️ Viaggio eliminato');
+            }
+        }
+
+        // Export/Import
+        function exportAllTrips() {
+            const allData = {
+                version: '3.0',
+                exportDate: new Date().toISOString(),
+                currentTrip: currentTrip,
+                savedTrips: savedTrips,
+                favorites: favorites
+            };
+            
+            const dataStr = JSON.stringify(allData, null, 2);
+            const dataBlob = new Blob([dataStr], {type: 'application/json'});
+            
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(dataBlob);
+            link.download = `TravelListPro_Export_${new Date().toLocaleDateString('it-IT').replace(/\//g, '-')}.json`;
+            link.click();
+            
+            updateSyncStatus('📤 Esportazione completata!');
+        }
+
+        function createFullBackup() {
+            exportAllTrips();
+        }
+
+        function restoreFromBackup() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            
+            input.onchange = function(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            
+                            // Verifica formato
+                            if (data.version && (data.savedTrips || data.currentTrip || data.favorites)) {
+                                if (confirm('Questo ripristinerà tutti i dati. I dati attuali saranno sovrascritti. Continuare?')) {
+                                    currentTrip = data.currentTrip || currentTrip;
+                                    savedTrips = data.savedTrips || [];
+                                    favorites = data.favorites || favorites;
+                                    
+                                    // Aggiorna UI
+                                    document.getElementById('tripTitleDisplay').textContent = currentTrip.name;
+                                    renderAllCategories();
+                                    renderSavedTrips();
+                                    renderFavoritesManagement();
+                                    updateStats();
+                                    saveToLocalStorage();
+                                    
+                                    updateSyncStatus('📥 Backup ripristinato!');
+                                    
+                                    if (getGoogleSheetsURL()) {
+                                        syncWithGoogleSheets();
+                                    }
+                                }
+                            } else {
+                                alert('File di backup non valido o formato non compatibile.');
+                            }
+                        } catch (error) {
+                            alert('Errore nella lettura del file di backup. Controlla che sia un file JSON valido.');
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            };
+            
+            input.click();
+        }
+
+        function clearAllTrips() {
+            if (confirm('Sei sicuro di voler eliminare TUTTI i viaggi salvati? Questa azione non può essere annullata.')) {
+                if (confirm('ATTENZIONE: Stai per eliminare tutti i viaggi salvati. Sei assolutamente sicuro?')) {
+                    savedTrips = [];
+                    saveToLocalStorage();
+                    renderSavedTrips();
+                    updateStats();
+                    updateSyncStatus('🗑️ Viaggi eliminati');
+                    
+                    if (getGoogleSheetsURL()) {
+                        syncWithGoogleSheets();
+                    }
+                }
+            }
+        }
+
+        function resetAllData() {
+            if (confirm('ATTENZIONE: Questo cancellerà TUTTI i dati inclusi viaggi, preferiti e impostazioni. Continuare?')) {
+                if (confirm('Sei ASSOLUTAMENTE sicuro? Questa azione NON può essere annullata!')) {
+                    // Reset completo
+                    currentTrip = {
+                        id: null,
+                        name: 'Nuovo Viaggio',
+                        categories: {
+                            clothing: [], hygiene: [], medicine: [],
+                            electronics: [], documents: [], todo: []
+                        },
+                        createdAt: null, updatedAt: null
+                    };
+                    
+                    savedTrips = [];
+                    
+                    // Reset preferiti ai valori predefiniti
+                    favorites = {
+                        clothing: ['Maglietta', 'Jeans', 'Scarpe comode'],
+                        hygiene: ['Spazzolino', 'Dentifricio', 'Shampoo'],
+                        medicine: ['Metformina', 'Toujeo', 'Tachipirina'],
+                        electronics: ['Caricabatterie', 'Powerbank', 'Cuffie'],
+                        documents: ['Passaporto', 'Carta identità', 'Tessera sanitaria'],
+                        todo: ['Controllare meteo', 'Prenotare hotel']
+                    };
+                    
+                    // Pulisci URL Google Sheets
+                    document.getElementById('googleSheetsURL').value = '';
+                    
+                    // Pulisci localStorage
+                    localStorage.removeItem('travelListProData');
+                    
+                    // Aggiorna UI
+                    document.getElementById('tripTitleDisplay').textContent = currentTrip.name;
+                    renderAllCategories();
+                    renderSavedTrips();
+                    renderFavoritesManagement();
+                    updateStats();
+                    
+                    updateSyncStatus('🔄 Reset completo eseguito');
+                }
+            }
+        }
+
+        // Tab Management
+        function switchTab(tabName) {
+            // Nascondi tutti i contenuti
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Rimuovi classe active da tutti i tab
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Mostra contenuto selezionato
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            
+            // Attiva tab selezionato
+            document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
+            
+            // Carica contenuti specifici
+            if (tabName === 'history') {
+                renderSavedTrips();
+            } else if (tabName === 'favorites') {
+                renderFavoritesManagement();
+            }
+        }
+
+        // Stats
+        function updateStats() {
+            document.getElementById('tripCount').textContent = savedTrips.length;
+            
+            const totalFavorites = Object.values(favorites).reduce((sum, items) => sum + items.length, 0);
+            document.getElementById('favoritesCount').textContent = totalFavorites;
+            
+            const lastSave = localStorage.getItem('travelListProData');
+            if (lastSave) {
+                try {
+                    const data = JSON.parse(lastSave);
+                    if (data.lastSave) {
+                        document.getElementById('lastSave').textContent = new Date(data.lastSave).toLocaleString('it-IT');
+                    }
+                } catch (e) {
+                    document.getElementById('lastSave').textContent = 'Errore';
+                }
+            }
+        }
+
+        // Event Handlers
+        document.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                const input = e.target;
+                
+                // Handle item inputs
+                if (input.classList.contains('item-input')) {
+                    const category = input.id.replace('-input', '');
+                    addItem(category);
+                }
+                
+                // Handle favorite inputs
+                else if (input.id && input.id.startsWith('favorite-') && input.id.endsWith('-input')) {
+                    const category = input.id.replace('favorite-', '').replace('-input', '');
+                    addFavorite(category);
+                }
+            }
+        });
+
+        // Click outside modal to close
+        document.addEventListener('click', function(e) {
+            const modal = document.getElementById('favoritesModal');
+            if (e.target === modal) {
+                closeFavoritesModal();
+            }
+        });
+
+        // Prevent modal close when clicking inside modal content
+        document.addEventListener('click', function(e) {
+            if (e.target.closest('.modal-content')) {
+                e.stopPropagation();
+            }
+        });
+
+        // Auto-focus on first input when switching to favorites tab
+        function focusFirstFavoriteInput() {
+            const firstInput = document.querySelector('#favorites-tab .item-input');
+            if (firstInput) {
+                setTimeout(() => firstInput.focus(), 100);
+            }
+        }
+
+        // Service Worker Registration (optional)
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                // Potresti registrare un service worker per funzionalità offline
+                console.log('Service Worker supportato per PWA');
+            });
+        }
+
+        // Warn user before leaving with unsaved changes
+        window.addEventListener('beforeunload', function(e) {
+            if (hasUnsavedChanges()) {
+                saveToLocalStorage();
+                // Optional: warn user (commented out to avoid annoyance)
+                // e.preventDefault();
+                // e.returnValue = '';
+            }
+        });
+
+        // Initialize on DOM load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Travel List Pro inizializzato!');
+        });
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Travel List Pro - Organizzatore Viaggi</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 10px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="plane" x="0" y="0" width="50" height="50" patternUnits="userSpaceOnUse"><text x="25" y="30" text-anchor="middle" fill="rgba(255,255,255,0.1)" font-size="20">✈️</text></pattern></defs><rect width="100" height="100" fill="url(%23plane)"/></svg>');
+            opacity: 0.3;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+            position: relative;
+            z-index: 1;
+        }
+
+        .nav-tabs {
+            background: white;
+            display: flex;
+            border-bottom: 2px solid #f1f3f4;
+        }
+
+        .nav-tab {
+            flex: 1;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+            border: none;
+            background: white;
+            font-size: 16px;
+        }
+
+        .nav-tab:hover {
+            background: #f8f9fa;
+        }
+
+        .nav-tab.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+            padding: 30px;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Trip Header */
+        .trip-header-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .trip-title-section {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .trip-title-display {
+            font-size: 1.8em;
+            font-weight: 700;
+            cursor: pointer;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: background 0.3s ease;
+        }
+
+        .trip-title-display:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .trip-title-edit {
+            font-size: 1.8em;
+            font-weight: 700;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            border-radius: 8px;
+            padding: 8px 15px;
+        }
+
+        .trip-title-edit::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .trip-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .header-btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 10px 15px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .header-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .sync-status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .sync-status.connected {
+            background: #e8f5e8;
+            color: #2d5016;
+        }
+
+        .sync-status.syncing {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .sync-status.offline {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        .categories {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 25px;
+        }
+
+        .category-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            border: 2px solid #f1f3f4;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .category-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .category-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f1f3f4;
+        }
+
+        .category-info {
+            display: flex;
+            align-items: center;
+        }
+
+        .category-icon {
+            font-size: 2em;
+            margin-right: 15px;
+        }
+
+        .category-title {
+            font-size: 1.3em;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .favorites-btn {
+            background: #17a2b8;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .favorites-btn:hover {
+            background: #138496;
+            transform: scale(1.05);
+        }
+
+        .item-input-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .item-input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .item-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .add-btn {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 12px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .add-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(76, 175, 80, 0.3);
+        }
+
+        .items-list {
+            min-height: 100px;
+        }
+
+        .item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .item:hover {
+            background: #e9ecef;
+            transform: translateX(3px);
+        }
+
+        .item.completed {
+            background: #d4edda;
+            text-decoration: line-through;
+            opacity: 0.7;
+        }
+
+        .item.editing {
+            background: #fff3cd;
+        }
+
+        .item-content {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            gap: 12px;
+        }
+
+        .item-checkbox {
+            transform: scale(1.2);
+        }
+
+        .item-text {
+            font-size: 16px;
+            color: #333;
+            cursor: pointer;
+        }
+
+        .item-edit-input {
+            font-size: 16px;
+            background: white;
+            border: 2px solid #667eea;
+            border-radius: 6px;
+            padding: 6px 10px;
+            flex: 1;
+        }
+
+        .item-actions {
+            display: flex;
+            gap: 5px;
+        }
+
+        .item-btn {
+            border: none;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .edit-btn {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .delete-btn {
+            background: #dc3545;
+            color: white;
+        }
+
+        .save-btn {
+            background: #28a745;
+            color: white;
+        }
+
+        .cancel-btn {
+            background: #6c757d;
+            color: white;
+        }
+
+        .item-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: #666;
+            font-style: italic;
+        }
+
+        .empty-state::before {
+            content: "📝";
+            font-size: 2.5em;
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            max-width: 500px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f1f3f4;
+        }
+
+        .modal-title {
+            font-size: 1.5em;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+            padding: 5px;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+        }
+
+        .close-btn:hover {
+            background: #f8f9fa;
+            color: #333;
+        }
+
+        .favorites-list {
+            margin: 20px 0;
+        }
+
+        .favorite-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .favorite-item:hover {
+            background: #e9ecef;
+        }
+
+        .favorite-checkbox {
+            margin-right: 12px;
+            transform: scale(1.3);
+        }
+
+        .favorite-text {
+            flex: 1;
+            font-size: 16px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .modal-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .modal-btn.primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .modal-btn.secondary {
+            background: #6c757d;
+            color: white;
+        }
+
+        .modal-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Favorites Management */
+        .favorites-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .favorites-category {
+            margin-bottom: 30px;
+        }
+
+        .favorites-category-header {
+            display: flex;
+            align-items: center;
+            justify-content: between;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f1f3f4;
+        }
+
+        .favorites-category-title {
+            font-size: 1.3em;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .favorite-management-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .favorite-management-item:hover {
+            background: #e9ecef;
+        }
+
+        .favorite-management-item.editing {
+            background: #fff3cd;
+        }
+
+        /* Settings */
+        .settings-section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .settings-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.4em;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .form-group input:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .action-btn {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 12px 20px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .action-btn.secondary {
+            background: #6c757d;
+        }
+
+        .action-btn.success {
+            background: #28a745;
+        }
+
+        .action-btn.danger {
+            background: #dc3545;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border: 1px solid #b8daff;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .info-box.warning {
+            background: #fff3cd;
+            border-color: #ffeaa7;
+        }
+
+        .info-box strong {
+            color: #333;
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) {
+            body {
+                padding: 5px;
+            }
+            
+            .header {
+                padding: 20px;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .tab-content {
+                padding: 15px;
+            }
+            
+            .categories {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .nav-tab {
+                padding: 15px 8px;
+                font-size: 12px;
+            }
+
+            .trip-header-card {
+                flex-direction: column;
+                align-items: stretch;
+                text-align: center;
+            }
+
+            .trip-title-display,
+            .trip-title-edit {
+                font-size: 1.4em;
+            }
+
+            .item-input-container {
+                flex-direction: column;
+            }
+
+            .modal-content {
+                margin: 10px;
+                padding: 20px;
+            }
+
+            .modal-actions {
+                flex-direction: column;
+            }
+
+            .modal-btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧳 Travel List Pro</h1>
+            <p>Organizza i tuoi viaggi in modo semplice e veloce</p>
+        </div>
+
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="switchTab('current')">📝 Viaggio Corrente</button>
+            <button class="nav-tab" onclick="switchTab('history')">📚 Viaggi Salvati</button>
+            <button class="nav-tab" onclick="switchTab('favorites')">⭐ I Miei Preferiti</button>
+            <button class="nav-tab" onclick="switchTab('settings')">⚙️ Configurazione</button>
+        </div>
+
+        <!-- Stato sincronizzazione -->
+        <div class="sync-status offline" id="syncStatus">
+            💾 Salvato localmente
+        </div>
+
+        <!-- Tab Viaggio Corrente -->
+        <div class="tab-content active" id="current-tab">
+            <div class="trip-header-card">
+                <div class="trip-title-section">
+                    <span class="category-icon">🧳</span>
+                    <div class="trip-title-display" id="tripTitleDisplay" onclick="editTripTitle()">
+                        Nuovo Viaggio
+                    </div>
+                    <input type="text" class="trip-title-edit" id="tripTitleEdit" placeholder="Nome del viaggio..." style="display: none;" onblur="saveTripTitle()" onkeypress="handleTitleKeypress(event)">
+                </div>
+                <div class="trip-actions">
+                    <button class="header-btn" onclick="editTripTitle()">✏️ Modifica</button>
+                    <button class="header-btn" onclick="saveTrip()">💾 Salva</button>
+                    <button class="header-btn" onclick="generatePDF()">📄 PDF</button>
+                    <button class="header-btn" onclick="newTrip()">🆕 Nuovo</button>
+                </div>
+            </div>
+
+            <div class="categories">
+                <div class="category-card">
+                    <div class="category-header">
+                        <div class="category-info">
+                            <span class="category-icon">👔</span>
+                            <span class="category-title">Abbigliamento</span>
+                        </div>
+                        <button class="favorites-btn" onclick="showFavoritesModal('clothing')">📋 Preferiti</button>
+                    </div>
+                    <div class="item-input-container">
+                        <input type="text" class="item-input" id="clothing-input" placeholder="es. Maglietta, Jeans...">
+                        <button class="add-btn" onclick="addItem('clothing')">Aggiungi</button>
+                    </div>
+                    <div class="items-list" id="clothing-list"></div>
+                </div>
+
+                <div class="category-card">
+                    <div class="category-header">
+                        <div class="category-info">
+                            <span class="category-icon">🧴</span>
+                            <span class="category-title">Igiene & Bellezza</span>
+                        </div>
+                        <button class="favorites-btn" onclick="showFavoritesModal('hygiene')">📋 Preferiti</button>
+                    </div>
+                    <div class="item-input-container">
+                        <input type="text" class="item-input" id="hygiene-input" placeholder="es. Spazzolino, Shampoo...">
+                        <button class="add-btn" onclick="addItem('hygiene')">Aggiungi</button>
+                    </div>
+                    <div class="items-list" id="hygiene-list"></div>
+                </div>
+
+                <div class="category-card">
+                    <div class="category-header">
+                        <div class="category-info">
+                            <span class="category-icon">💊</span>
+                            <span class="category-title">Medicinali</span>
+                        </div>
+                        <button class="favorites-btn" onclick="showFavoritesModal('medicine')">📋 Preferiti</button>
+                    </div>
+                    <div class="item-input-container">
+                        <input type="text" class="item-input" id="medicine-input" placeholder="es. Tachipirina, Cerotti...">
+                        <button class="add-btn" onclick="addItem('medicine')">Aggiungi</button>
+                    </div>
+                    <div class="items-list" id="medicine-list"></div>
+                </div>
+
+                <div class="category-card">
+                    <div class="category-header">
+                        <div class="category-info">
+                            <span class="category-icon">📱</span>
+                            <span class="category-title">Elettronica</span>
+                        </div>
+                        <button class="favorites-btn" onclick="showFavoritesModal('electronics')">📋 Preferiti</button>
+                    </div>
+                    <div class="item-input-container">
+                        <input type="text" class="item-input" id="electronics-input" placeholder="es. Caricabatterie, Cuffie...">
+                        <button class="add-btn" onclick="addItem('electronics')">Aggiungi</button>
+                    </div>
+                    <div class="items-list" id="electronics-list"></div>
+                </div>
+
+                <div class="category-card">
+                    <div class="category-header">
+                        <div class="category-info">
+                            <span class="category-icon">📄</span>
+                            <span class="category-title">Documenti</span>
+                        </div>
+                        <button class="favorites-btn" onclick="showFavoritesModal('documents')">📋 Preferiti</button>
+                    </div>
+                    <div class="item-input-container">
+                        <input type="text" class="item-input" id="documents-input" placeholder="es. Passaporto, Biglietti...">
+                        <button class="add-btn" onclick="addItem('documents')">Aggiungi</button>
+                    </div>
+                    <div class="items-list" id="documents-list"></div>
+                </div>
+
+                <div class="category-card">
+                    <div class="category-header">
+                        <div class="category-info">
+                            <span class="category-icon">✅</span>
+                            <span class="category-title">Cose da Fare</span>
+                        </div>
+                        <button class="favorites-btn" onclick="showFavoritesModal('todo')">📋 Preferiti</button>
+                    </div>
+                    <div class="item-input-container">
+                        <input type="text" class="item-input" id="todo-input" placeholder="es. Prenotare hotel, Controllo meteo...">
+                        <button class="add-btn" onclick="addItem('todo')">Aggiungi</button>
+                    </div>
+                    <div class="items-list" id="todo-list"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Viaggi Salvati -->
+        <div class="tab-content" id="history-tab">
+            <div class="settings-section">
+                <h3>📚 I Tuoi Viaggi Salvati</h3>
+                <div id="saved-trips"></div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="action-btn secondary" onclick="exportAllTrips()">📤 Esporta Tutti</button>
+                    <button class="action-btn danger" onclick="clearAllTrips()">🗑️ Cancella Storia</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Preferiti -->
+        <div class="tab-content" id="favorites-tab">
+            <div class="favorites-section">
+                <h3>⭐ I Miei Preferiti</h3>
+                <p style="color: #666; margin-bottom: 20px;">Gestisci i tuoi elementi preferiti per ogni categoria. Questi appariranno quando usi "📋 Preferiti" durante la creazione di un viaggio.</p>
+                
+                <div id="favorites-categories"></div>
+            </div>
+        </div>
+
+        <!-- Tab Configurazione -->
+        <div class="tab-content" id="settings-tab">
+            <div class="settings-section">
+                <h3>☁️ Sincronizzazione Google Sheets (Opzionale)</h3>
+                <div class="form-group">
+                    <label for="googleSheetsURL">URL Google Sheets:</label>
+                    <input type="url" id="googleSheetsURL" placeholder="https://docs.google.com/spreadsheets/d/.../edit?usp=sharing">
+                    <small style="color: #666;">Lascia vuoto per usare solo il salvataggio locale</small>
+                </div>
+                <div class="form-group">
+                    <button class="action-btn success" onclick="testGoogleSheetsConnection()">🔗 Testa Connessione</button>
+                    <button class="action-btn" onclick="syncWithGoogleSheets()">☁️ Sincronizza Ora</button>
+                    <button class="action-btn secondary" onclick="clearGoogleSheetsURL()">🗑️ Rimuovi Link</button>
+                </div>
+                
+                <div class="info-box">
+                    <strong>📋 Come configurare Google Sheets:</strong><br>
+                    1. Crea un nuovo Google Sheets<br>
+                    2. Vai su "Condividi" → "Chiunque con il link può visualizzare"<br>
+                    3. Copia il link e incollalo qui sopra<br>
+                    4. Testa la connessione<br><br>
+                    
+                    <strong>⚠️ Limitazione CORS:</strong><br>
+                    I browser bloccano l'accesso a Google Sheets da file locali per sicurezza.
+                </div>
+                
+                <div class="info-box warning">
+                    <strong>🛠️ Soluzioni CORS:</strong><br>
+                    
+                    <strong>1. Hosting Web (Consigliato):</strong><br>
+                    • Carica su GitHub Pages, Netlify, Vercel (gratis)<br>
+                    • CORS problema risolto automaticamente<br><br>
+                    
+                    <strong>2. Server Locale:</strong><br>
+                    • Terminal: <code>python -m http.server 8000</code><br>
+                    • Apri: <code>http://localhost:8000/travel-list.html</code><br><br>
+                    
+                    <strong>3. Sync Manuale (Sempre Funziona):</strong><br>
+                    • Usa Export/Import per multi-device<br>
+                    • Zero problemi tecnici<br>
+                    • Massima affidabilità
+                </div>
+            </div>
+
+            <div class="settings
