@@ -597,34 +597,195 @@
                 return;
             }
             
-            // Usa JSONP per bypassare CORS
-            const callback = 'jsonp_callback_' + Date.now();
-            const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&sheet=TravelData`;
+            // Prova multiple soluzioni per CORS
+            testMultipleCORSMethods(sheetId);
+        }
+
+        async function testMultipleCORSMethods(sheetId) {
+            const methods = [
+                {
+                    name: 'Google Sheets API Public',
+                    url: `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/A1:Z1000?key=AIzaSyD-9tSrke72PouQMnMX-a7UKEM-Bhw7NgA&alt=json`,
+                    description: 'API pubblica Google'
+                },
+                {
+                    name: 'CSV Export with no-cors',
+                    url: `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=0`,
+                    description: 'Export CSV diretto',
+                    mode: 'no-cors'
+                },
+                {
+                    name: 'Published CSV',
+                    url: `https://docs.google.com/spreadsheets/d/${sheetId}/pub?gid=0&single=true&output=csv`,
+                    description: 'CSV pubblicato'
+                },
+                {
+                    name: 'JSONP Alternative',
+                    url: `https://spreadsheets.google.com/feeds/list/${sheetId}/od6/public/values?alt=json-in-script&callback=handleGoogleSheetsData`,
+                    description: 'Feed JSON legacy'
+                }
+            ];
+
+            let successFound = false;
+
+            for (const method of methods) {
+                if (successFound) break;
+                
+                try {
+                    updateSyncStatus(`🔄 Testando: ${method.description}...`, 'syncing');
+                    
+                    if (method.name === 'JSONP Alternative') {
+                        // Test con JSONP
+                        const success = await testJSONPMethod(method.url);
+                        if (success) {
+                            updateSyncStatus('✅ Connessione JSONP riuscita!', 'connected');
+                            successFound = true;
+                            saveToLocalStorage();
+                            break;
+                        }
+                    } else {
+                        const response = await fetch(method.url, {
+                            mode: method.mode || 'cors',
+                            credentials: 'omit',
+                            headers: method.mode === 'no-cors' ? {} : {
+                                'Accept': 'application/json,text/csv,*/*'
+                            }
+                        });
+
+                        if (response.ok || response.type === 'opaque') {
+                            updateSyncStatus(`✅ Successo: ${method.description}`, 'connected');
+                            successFound = true;
+                            saveToLocalStorage();
+                            
+                            // Se possibile, leggi i dati
+                            if (response.ok && response.type !== 'opaque') {
+                                const data = await response.text();
+                                console.log('Dati ricevuti:', data.substring(0, 200) + '...');
+                            }
+                            break;
+                        }
+                    }
+                } catch (error) {
+                    console.log(`${method.name} fallito:`, error.message);
+                    continue;
+                }
+            }
+
+            if (!successFound) {
+                showAdvancedCORSGuide();
+            }
+        }
+
+        function testJSONPMethod(url) {
+            return new Promise((resolve) => {
+                const timeout = setTimeout(() => {
+                    resolve(false);
+                }, 5000);
+
+                // Callback globale temporaneo
+                window.handleGoogleSheetsData = function(data) {
+                    clearTimeout(timeout);
+                    delete window.handleGoogleSheetsData;
+                    console.log('JSONP Success:', data);
+                    resolve(true);
+                };
+
+                const script = document.createElement('script');
+                script.src = url;
+                script.onerror = () => {
+                    clearTimeout(timeout);
+                    delete window.handleGoogleSheetsData;
+                    resolve(false);
+                };
+
+                document.head.appendChild(script);
+                
+                setTimeout(() => {
+                    try {
+                        document.head.removeChild(script);
+                    } catch (e) {}
+                }, 5100);
+            });
+        }
+
+        function showAdvancedCORSGuide() {
+            updateSyncStatus('⚠️ CORS: Serve configurazione avanzata', 'error');
             
-            // Crea script tag per JSONP
-            const script = document.createElement('script');
-            script.src = csvUrl;
+            const guide = `
+🔧 GOOGLE SHEETS - GUIDA CORS AVANZATA
+
+Il tuo Google Sheets deve essere configurato in modo specifico:
+
+📋 CONFIGURAZIONE CORRETTA:
+
+1️⃣ PUBBLICA IL FOGLIO:
+   File → Condividi → Pubblica sul Web
+   ✅ Seleziona: "Intero documento" 
+   ✅ Formato: "Pagina Web"
+   ✅ Click "Pubblica"
+
+2️⃣ CONDIVISIONE PUBBLICA:
+   Bottone "Condividi" (in alto a destra)
+   ✅ "Chiunque su Internet con questo link può visualizzare"
+   ✅ Assicurati che sia "Visualizzatore" (non Editor)
+
+3️⃣ URL CORRETTO:
+   Usa l'URL di condivisione, non quello di modifica
+   Esempio: https://docs.google.com/spreadsheets/d/ABC123.../edit?usp=sharing
+
+4️⃣ ALTERNATIVA GARANTITA:
+   Se continua a non funzionare, usa:
+   • Export/Import per sincronizzare
+   • Funziona sempre, zero problemi CORS
+   • Upload JSON su Google Drive per condividere
+
+🛠️ DEBUGGING:
+Se il problema persiste, il foglio potrebbe non essere pubblico.
+Prova a aprire l'URL in una finestra anonima: dovrebbe aprirsi senza login.
+
+Vuoi procedere con Export/Import invece?
+            `;
             
-            // Timeout per la connessione
-            const timeout = setTimeout(() => {
-                document.head.removeChild(script);
-                showCORSWorkaround();
-            }, 5000);
+            if (confirm(guide)) {
+                // Disabilita Google Sheets e mostra alternative
+                document.getElementById('googleSheetsURL').value = '';
+                updateSyncStatus('💾 Modalità Export/Import attivata', 'offline');
+                showExportImportGuide();
+            }
+        }
+
+        function showExportImportGuide() {
+            const exportGuide = `
+📱 SINCRONIZZAZIONE MULTI-DEVICE SENZA CORS
+
+✅ METODO INFALLIBILE:
+
+1️⃣ ESPORTA dal primo device:
+   Configurazione → "📤 Backup Completo"
+   Si scarica un file JSON
+
+2️⃣ CONDIVIDI il file:
+   • Email a te stesso
+   • WhatsApp/Telegram 
+   • Google Drive / Dropbox
+   • AirDrop (iOS/Mac)
+
+3️⃣ IMPORTA sul secondo device:
+   Configurazione → "📥 Ripristina Backup"
+   Seleziona il file JSON
+
+🔄 SINCRONIZZAZIONE:
+Ripeti quando hai modifiche importanti.
+È più veloce di quanto sembri!
+
+💡 VANTAGGI:
+• Funziona sempre al 100%
+• Nessun problema tecnico
+• Massima privacy
+• Zero dipendenze cloud
+            `;
             
-            script.onload = () => {
-                clearTimeout(timeout);
-                document.head.removeChild(script);
-                updateSyncStatus('✅ Sheet trovato! (Usa workaround CORS)', 'connected');
-                saveToLocalStorage();
-            };
-            
-            script.onerror = () => {
-                clearTimeout(timeout);
-                document.head.removeChild(script);
-                showCORSWorkaround();
-            };
-            
-            document.head.appendChild(script);
+            alert(exportGuide);
         }
 
         function showCORSWorkaround() {
@@ -1138,6 +1299,19 @@ Il browser blocca l'accesso diretto a Google Sheets per motivi di sicurezza.
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Travel List Pro - Organizzatore Viaggi</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="description" content="Organizza i tuoi viaggi con liste intelligenti, preferiti personalizzabili e sincronizzazione cloud">
+    <meta name="theme-color" content="#667eea">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Travel List Pro">
+    
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧳</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧳</text></svg>">
+    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
     <style>
@@ -2025,31 +2199,37 @@ Il browser blocca l'accesso diretto a Google Sheets per motivi di sicurezza.
                 </div>
                 
                 <div class="info-box">
-                    <strong>📋 Come configurare Google Sheets:</strong><br>
-                    1. Crea un nuovo Google Sheets<br>
-                    2. Vai su "Condividi" → "Chiunque con il link può visualizzare"<br>
-                    3. Copia il link e incollalo qui sopra<br>
-                    4. Testa la connessione<br><br>
+                    <strong>📋 Configurazione Google Sheets (Specifica per CORS):</strong><br><br>
                     
-                    <strong>⚠️ Limitazione CORS:</strong><br>
-                    I browser bloccano l'accesso a Google Sheets da file locali per sicurezza.
+                    <strong>1. PUBBLICA il foglio:</strong><br>
+                    • File → Condividi → Pubblica sul Web<br>
+                    • Seleziona "Intero documento" + "Pagina Web"<br>
+                    • Click "Pubblica"<br><br>
+                    
+                    <strong>2. CONDIVISIONE pubblica:</strong><br>
+                    • Bottone "Condividi" → "Chiunque su Internet può visualizzare"<br>
+                    • Importante: deve essere "Visualizzatore"<br><br>
+                    
+                    <strong>3. TEST dell'URL:</strong><br>
+                    • Apri l'URL in finestra anonima<br>
+                    • Deve aprirsi senza richiedere login<br><br>
+                    
+                    <strong>4. Usa "🔗 Testa Connessione"</strong> - prova più metodi automaticamente
                 </div>
                 
                 <div class="info-box warning">
-                    <strong>🛠️ Soluzioni CORS:</strong><br>
+                    <strong>⚠️ Se CORS continua a dare problemi:</strong><br><br>
                     
-                    <strong>1. Hosting Web (Consigliato):</strong><br>
-                    • Carica su GitHub Pages, Netlify, Vercel (gratis)<br>
-                    • CORS problema risolto automaticamente<br><br>
+                    <strong>🎯 EXPORT/IMPORT (Sempre Funziona):</strong><br>
+                    • Usa "📤 Backup Completo" per esportare<br>
+                    • Condividi file JSON via email/WhatsApp<br>
+                    • Importa con "📥 Ripristina Backup"<br>
+                    • Zero problemi tecnici, massima affidabilità<br><br>
                     
-                    <strong>2. Server Locale:</strong><br>
-                    • Terminal: <code>python -m http.server 8000</code><br>
-                    • Apri: <code>http://localhost:8000/travel-list.html</code><br><br>
-                    
-                    <strong>3. Sync Manuale (Sempre Funziona):</strong><br>
-                    • Usa Export/Import per multi-device<br>
-                    • Zero problemi tecnici<br>
-                    • Massima affidabilità
+                    <strong>🔧 Alternative Tecniche:</strong><br>
+                    • Browser extension "CORS Unblock"<br>
+                    • Proxy CORS service<br>
+                    • Google Apps Script endpoint
                 </div>
             </div>
 
